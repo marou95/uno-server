@@ -114,39 +114,75 @@ export class UNORoom extends Room<UNOState> {
     }
   }
 
-  onJoin(client: Client, options: any) {
+onJoin(client: Client, options: any) {
     try {
         console.log(`👤 Joining: ${client.sessionId}`);
-        
-        // ✅ NOUVEAU: Vérifier si c'est une reconnexion
+
+        // 1. Vérification standard (F5 très rapide ou bug client)
         let player = this.state.players.get(client.sessionId);
-        
-        if (player && !player.isConnected) {
-            // C'est une reconnexion !
-            console.log(`🔄 Player ${client.sessionId} reconnected!`);
-            player.isConnected = true;
-            player.name = options.name || player.name;
-            
-            // Annuler le timeout de déconnexion
-            const timeout = this.disconnectionTimeouts.get(client.sessionId);
+        if (player) {
+             player.isConnected = true;
+             return;
+        }
+
+        // 2. RECUPERATION : Chercher un joueur déconnecté avec le même NOM
+        const oldPlayerEntry = Array.from(this.state.players.entries())
+            .find(([, p]) => p.name === (options.name || "Guest") && !p.isConnected);
+
+        if (oldPlayerEntry) {
+            const [oldSessionId, existingPlayer] = oldPlayerEntry;
+            console.log(`🔄 Recovery: ${existingPlayer.name} is back! (Old: ${oldSessionId} -> New: ${client.sessionId})`);
+
+            // A. Annuler la suppression automatique
+            const timeout = this.disconnectionTimeouts.get(oldSessionId);
             if (timeout) {
                 timeout.clear();
-                this.disconnectionTimeouts.delete(client.sessionId);
+                this.disconnectionTimeouts.delete(oldSessionId);
             }
+
+            // B. Mettre à jour l'objet Player
+            existingPlayer.isConnected = true;
+            existingPlayer.sessionId = client.sessionId; 
+
+            // C. Mettre à jour la Map players
+            this.state.players.delete(oldSessionId);
+            this.state.players.set(client.sessionId, existingPlayer);
+
+            // D. Mettre à jour l'index des joueurs (ordre du tour)
+            const idx = this.playerIndexes.indexOf(oldSessionId);
+            if (idx !== -1) {
+                this.playerIndexes[idx] = client.sessionId;
+            }
+
+            // --- CORRECTION DU BUG ---
+            // E. Si c'était son tour, on met à jour l'ID du tour actuel
+            if (this.state.currentTurnPlayerId === oldSessionId) {
+                this.state.currentTurnPlayerId = client.sessionId;
+                console.log(`👉 Turn transferred to new ID: ${client.sessionId}`);
+            }
+
+            // F. Si c'était lui qui devait payer une pénalité UNO
+            if (this.state.pendingUnoPenaltyPlayerId === oldSessionId) {
+                this.state.pendingUnoPenaltyPlayerId = client.sessionId;
+            }
+            // -------------------------
             
-            this.broadcast("notification", `${player.name} reconnected!`);
+            this.broadcast("notification", `${existingPlayer.name} reconnected!`);
+            
+            // Petit hack pour forcer le client à rafraîchir son état visuel immédiatement
+            client.send("state_refresh"); 
             return;
         }
         
-        // Première connexion
-        if (!player) {
-            player = new Player();
-            player.id = client.sessionId;
-            player.sessionId = client.sessionId;
-            player.name = options.name || "Guest";
-            this.state.players.set(client.sessionId, player);
-            this.playerIndexes.push(client.sessionId);
-        }
+        // 3. Nouveau Joueur
+        console.log(`🆕 New player: ${options.name}`);
+        player = new Player();
+        player.id = client.sessionId;
+        player.sessionId = client.sessionId;
+        player.name = options.name || "Guest";
+        this.state.players.set(client.sessionId, player);
+        this.playerIndexes.push(client.sessionId);
+
     } catch (e) {
         console.error("Join error:", e);
     }
