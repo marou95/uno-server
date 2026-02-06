@@ -11,6 +11,7 @@ export class Player extends Schema {
   @type("string") id: string = "";
   @type("string") sessionId: string = "";
   @type("string") name: string = "";
+  @type("string") deviceId: string = "";
   @type([Card]) hand = new ArraySchema<Card>();
   @type("boolean") isReady: boolean = false;
   @type("number") cardsRemaining: number = 0;

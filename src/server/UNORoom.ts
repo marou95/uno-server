@@ -161,42 +161,60 @@ export class UNORoom extends Room<UNOState> {
     this.disconnectionTimeouts.forEach(t => t.clear());
   }
 
-  onJoin(client: Client, options: any) {
+onJoin(client: Client, options: any) {
     try {
-      console.log(`👤 Joining: ${client.sessionId}`);
-      let player = this.state.players.get(client.sessionId);
-      if (player) { player.isConnected = true; return; }
+        console.log(`👤 Joining: ${client.sessionId} (Device: ${options.deviceId})`);
 
-      const oldPlayerEntry = Array.from(this.state.players.entries())
-        .find(([, p]) => p.name === (options.name || "Guest") && !p.isConnected);
+        // 1. Vérification standard
+        let player = this.state.players.get(client.sessionId);
+        if (player) { player.isConnected = true; return; }
 
-      if (oldPlayerEntry) {
-        const [oldSessionId, existingPlayer] = oldPlayerEntry;
-        const timeout = this.disconnectionTimeouts.get(oldSessionId);
-        if (timeout) { timeout.clear(); this.disconnectionTimeouts.delete(oldSessionId); }
+        // 2. RECUPERATION SÉCURISÉE (Par Device ID)
+        // On cherche un joueur déconnecté qui a le MÊME deviceId que celui qui se connecte
+        const oldPlayerEntry = Array.from(this.state.players.entries())
+            .find(([, p]) => p.deviceId === options.deviceId && !p.isConnected);
 
-        existingPlayer.isConnected = true;
-        existingPlayer.sessionId = client.sessionId;
-        this.state.players.delete(oldSessionId);
-        this.state.players.set(client.sessionId, existingPlayer);
+        if (oldPlayerEntry) {
+            const [oldSessionId, existingPlayer] = oldPlayerEntry;
+            console.log(`🔄 Recovery: ${existingPlayer.name} identified by DeviceID!`);
 
-        const idx = this.playerIndexes.indexOf(oldSessionId);
-        if (idx !== -1) { this.playerIndexes[idx] = client.sessionId; }
+            // Nettoyage timeout suppression
+            const timeout = this.disconnectionTimeouts.get(oldSessionId);
+            if (timeout) { timeout.clear(); this.disconnectionTimeouts.delete(oldSessionId); }
 
-        if (this.state.currentTurnPlayerId === oldSessionId) this.state.currentTurnPlayerId = client.sessionId;
-        if (this.state.pendingUnoPenaltyPlayerId === oldSessionId) this.state.pendingUnoPenaltyPlayerId = client.sessionId;
+            // Mise à jour session
+            existingPlayer.isConnected = true;
+            existingPlayer.sessionId = client.sessionId; 
+            
+            // Si le joueur a changé de pseudo entre temps, on met à jour le nom aussi
+            if (options.name) existingPlayer.name = options.name;
 
-        this.broadcast("notification", `${existingPlayer.name} reconnected!`);
-        client.send("state_refresh");
-        return;
-      }
+            // Déplacement dans la map
+            this.state.players.delete(oldSessionId);
+            this.state.players.set(client.sessionId, existingPlayer);
 
-      player = new Player();
-      player.id = client.sessionId;
-      player.sessionId = client.sessionId;
-      player.name = options.name || "Guest";
-      this.state.players.set(client.sessionId, player);
-      this.playerIndexes.push(client.sessionId);
+            // Mise à jour index et tour
+            const idx = this.playerIndexes.indexOf(oldSessionId);
+            if (idx !== -1) { this.playerIndexes[idx] = client.sessionId; }
+
+            if (this.state.currentTurnPlayerId === oldSessionId) this.state.currentTurnPlayerId = client.sessionId;
+            if (this.state.pendingUnoPenaltyPlayerId === oldSessionId) this.state.pendingUnoPenaltyPlayerId = client.sessionId;
+            
+            this.broadcast("notification", `${existingPlayer.name} reconnected!`);
+            client.send("state_refresh"); 
+            return;
+        }
+        
+        // 3. Nouveau Joueur
+        console.log(`🆕 New player: ${options.name}`);
+        player = new Player();
+        player.id = client.sessionId;
+        player.sessionId = client.sessionId;
+        player.deviceId = options.deviceId || "unknown"; // ✅ Sauvegarde du Device ID
+        player.name = options.name || "Guest";
+        this.state.players.set(client.sessionId, player);
+        this.playerIndexes.push(client.sessionId);
+
     } catch (e) { console.error("Join error:", e); }
   }
 
